@@ -1,92 +1,85 @@
-// Reporter de errores de SERVIDOR (Node/edge) → GLZ Maintenance.
+// Reporter de errores de SERVIDOR (Node) → Bugsink, envoltorio fino sobre @sentry/node.
 // No toca window/document: es el complemento del core de navegador. Pensado para
-// `instrumentation.ts` (onRequestError) y para avisos manuales en server actions,
+// `instrumentation.ts` (register + onRequestError) y para avisos manuales en server actions,
 // rutas y librerías de servidor.
 //
-// AWAITABLE con timeout corto: en funciones serverless conviene `await` para que
-// el POST salga antes de que la función se congele; el timeout evita que un motor
-// LENTO (no caído) alargue la respuesta al usuario. Nunca lanza (best-effort).
+// AWAITABLE con flush corto: en funciones serverless conviene `await` para que el evento salga
+// antes de que la función se congele; el timeout evita que un backend LENTO alargue la respuesta
+// al usuario. Nunca lanza (best-effort).
+import * as SentryNode from '@sentry/node';
 import { resolverConfig } from './config.js';
-const TIMEOUT_MS = 3000;
-let cfg = null;
-/** Config perezosa: si nadie llamó a initServidor, se resuelve de env la 1ª vez. */
-function conf() {
-    return (cfg ??= resolverConfig());
+const FLUSH_MS = 2000;
+let sentry = SentryNode;
+/** @internal Solo para tests: sustituye el cliente Sentry real por un doble. */
+export function __setSentryParaTests(doble) {
+    sentry = doble;
 }
-async function postar(ruta, cuerpo) {
-    const controlador = new AbortController();
-    const id = setTimeout(() => controlador.abort(), TIMEOUT_MS);
+/** @internal Solo para tests: restablece el estado del módulo entre casos. */
+export function __resetParaTests() {
+    sentry = SentryNode;
+    iniciado = false;
+}
+let iniciado = false; // idempotencia
+/** Vacía la cola de Sentry con timeout corto. Best-effort: nunca lanza. */
+async function vaciar() {
     try {
-        await fetch(`${conf().endpoint}${ruta}`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(cuerpo),
-            signal: controlador.signal,
-        });
+        await sentry.flush(FLUSH_MS);
     }
     catch {
-        /* best-effort: timeout, red caída o motor lento no rompen el flujo de negocio */
-    }
-    finally {
-        clearTimeout(id);
+        /* best-effort: un flush lento/fallido no rompe el flujo de negocio */
     }
 }
 /**
- * Opcional pero recomendado en `instrumentation.ts` (register): fija la config y
- * registra la app en el tablero (aparece en estado OK aunque nunca falle).
+ * Opcional pero recomendado en `instrumentation.ts` (register): inicializa @sentry/node (→ Bugsink)
+ * con dsn/entorno/release de entorno y el tag `app`. Idempotente. Sin DSN no inicializa; el gating
+ * por entorno (local/test no reportan) viaja en `enabled`.
+ *   dsn: SENTRY_DSN / GLZ_SENTRY_DSN · entorno: GLZ_ENV (o derivado) · release: GLZ_RELEASE · app: GLZ_APP
  */
 export async function initServidor(opts) {
-    cfg = resolverConfig(opts);
-    if (!cfg.activo)
-        return; // entorno no reportable (p.ej. local) → no registrar
-    await postar('/api/registro', { app: cfg.app, release: cfg.release, entorno: cfg.entorno });
-}
-/** Reporta una excepción de servidor. `contexto` se anexa al mensaje. Nunca lanza. */
-export async function reportarErrorServidor(err, ctx) {
-    const c = conf();
-    if (!c.activo)
+    if (iniciado)
         return;
-    const e = err instanceof Error ? err : new Error(typeof err === 'string' ? err : seguro(err));
-    const mensaje = ctx?.contexto ? `${e.message} · ${ctx.contexto}` : e.message;
-    if (!mensaje)
-        return;
-    await postar('/api/error', {
-        app: c.app,
-        mensaje,
-        nivel: ctx?.nivel ?? 'error',
-        entorno: c.entorno,
-        ...(e.stack ? { stack: e.stack } : {}),
-        ...(c.release ? { release: c.release } : {}),
+    const cfg = resolverConfig(opts);
+    if (!cfg.dsn)
+        return; // sin DSN → reporter desactivado
+    sentry.init({
+        dsn: cfg.dsn,
+        environment: cfg.entorno,
+        release: cfg.release,
+        enabled: cfg.activo && Boolean(cfg.dsn),
+        initialScope: { tags: { app: cfg.app } },
     });
+    iniciado = true;
+}
+/** Reporta una excepción de servidor. `contexto` se anexa como dato extra. Nunca lanza. */
+export async function reportarErrorServidor(err, ctx) {
+    try {
+        sentry.captureException(err, {
+            level: ctx?.nivel ?? 'error',
+            ...(ctx?.contexto ? { extra: { contexto: ctx.contexto } } : {}),
+        });
+        await vaciar();
+    }
+    catch {
+        /* best-effort */
+    }
 }
 /** Reporta un mensaje (no-excepción) de servidor. Nunca lanza. */
 export async function reportarMensajeServidor(mensaje, ctx) {
     if (!mensaje)
         return;
-    const c = conf();
-    if (!c.activo)
-        return;
-    await postar('/api/error', {
-        app: c.app,
-        mensaje,
-        nivel: ctx?.nivel ?? 'error',
-        entorno: c.entorno,
-        ...(c.release ? { release: c.release } : {}),
-    });
+    try {
+        sentry.captureMessage(mensaje, { level: ctx?.nivel ?? 'error' });
+        await vaciar();
+    }
+    catch {
+        /* best-effort */
+    }
 }
 /**
  * Hook nativo de Next para `instrumentation.ts`:
  *   export { onRequestError } from '@glz/maintenance/server'
- * Next lo invoca ante errores de petición en servidor (nodejs y edge).
+ * Next lo invoca ante errores de petición en servidor (nodejs y edge). Anexa el path como contexto.
  */
 export async function onRequestError(err, request) {
     await reportarErrorServidor(err, request?.path ? { contexto: request.path } : undefined);
-}
-function seguro(v) {
-    try {
-        return JSON.stringify(v);
-    }
-    catch {
-        return String(v);
-    }
 }

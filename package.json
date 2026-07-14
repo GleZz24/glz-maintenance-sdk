@@ -1,7 +1,7 @@
 {
   "name": "@glz/maintenance",
-  "version": "0.5.0",
-  "description": "Reporter de errores hacia GLZ Maintenance (alternativa propia a Sentry, sin terceros)",
+  "version": "1.0.0",
+  "description": "Reporter de errores GLZ — envoltorio fino sobre Sentry apuntando a Bugsink (self-host, soberano UE)",
   "type": "module",
   "exports": {
     ".": {
@@ -28,6 +28,10 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@sentry/browser": "^10.64.0",
+    "@sentry/node": "^10.64.0"
   },
   "peerDependencies": {
     "react": ">=18"

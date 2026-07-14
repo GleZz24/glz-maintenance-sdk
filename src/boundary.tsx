@@ -1,9 +1,10 @@
-// ErrorBoundary de React que reporta a GLZ Maintenance y muestra un fallback sobrio
-// (evita la pantalla blanca). React es peer dependency OPCIONAL: si no usas React,
-// importa solo initMaintenance/reportarError de core.
+// ErrorBoundary de React que reporta a Bugsink (vía @sentry/browser) y muestra un fallback sobrio
+// (evita la pantalla blanca). React es peer dependency OPCIONAL: si no usas React, importa solo
+// initMaintenance/reportarError de core. El error del boundary NUNCA se filtra (no es un rechazo
+// de promesa): el beforeSend solo actúa sobre unhandledrejection.
 
 import { Component, type ReactNode } from 'react'
-import { reportarError } from './core.js'
+import * as Sentry from '@sentry/browser'
 
 interface Props {
   children: ReactNode
@@ -22,7 +23,11 @@ export class MaintenanceBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error): void {
-    reportarError(error)
+    try {
+      Sentry.captureException(error)
+    } catch {
+      /* nunca romper el árbol de React por culpa del reporte */
+    }
   }
 
   render(): ReactNode {
