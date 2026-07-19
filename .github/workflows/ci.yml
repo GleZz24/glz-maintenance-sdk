@@ -27,7 +27,7 @@ jobs:
 
       # Node alineado con engines (>=20); usa 24 (versión de runtime/local).
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
