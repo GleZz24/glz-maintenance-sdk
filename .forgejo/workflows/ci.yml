@@ -11,10 +11,24 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Barrido semanal (24-ago-2026). Los gates de seguridad de aqui abajo —OSV-Scanner sobre el
+  # lockfile— solo miran cuando alguien empuja: un repo parado no es un repo seguro, es un repo
+  # sin mirar. El motor glz-maintenance estuvo del 16-jul al 24-ago sin construir y el primer
+  # commit se encontro de golpe 18 CVEs (13 High) en 6 transitivas. Este SDK lleva parado mas
+  # tiempo aun y es backbone de telemetria de 3 consumidores. Con esto el lockfile se revisa
+  # aunque nadie lo toque, y un hallazgo llega por la sonda ci-sdk del monitor.
+  # Lunes 06:20 UTC, escalonado para no amontonarse con lo que ya corre en el VPS: higiene de
+  # disco 04:00, simulacro de restauracion 05:00, glz-maintenance 06:00, apt-daily sobre 07:00.
+  schedule:
+    - cron: '20 6 * * 1'
   workflow_dispatch: {}
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # El EVENTO va en la clave a proposito: si el grupo fuera solo la ref, el barrido semanal y un
+  # push a main compartirian grupo y `cancel-in-progress` haria que uno matara al otro (el lunes
+  # a las 06:20 el barrido cancelaria un push en curso, o el push se comeria la unica revision
+  # de la semana).
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
